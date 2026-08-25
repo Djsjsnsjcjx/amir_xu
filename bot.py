@@ -11,7 +11,6 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
-    ConversationHandler,
     ContextTypes,
     filters,
 )
@@ -33,9 +32,6 @@ SERVICES = [
     ("NL_MT", "NL-MT"),
 ]
 
-# Conversation states
-WAITING_TOKEN = 1
-
 # User session storage (token per user)
 user_sessions: dict[int, RailwayClient] = {}
 
@@ -52,7 +48,7 @@ logger = logging.getLogger(__name__)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Welcome message"""
     keyboard = [
-        [InlineKeyboardButton("🚀 شروع", callback_data="help")],
+        [InlineKeyboardButton("🚀 شروع", callback_data="show_help")],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -179,31 +175,51 @@ async def deploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle inline keyboard buttons"""
     query = update.callback_query
-    await query.answer()
+    
+    try:
+        await query.answer()
+    except Exception:
+        pass
 
     user_id = update.effective_user.id
+    data = query.data
 
-    if query.data == "confirm_deploy":
-        if user_id not in user_sessions:
-            await query.edit_message_text("⚠️ اتصال منقضی شده. دوباره /connect کنید.")
-            return
+    logger.info(f"Button pressed: {data} by user {user_id}")
 
-        client = user_sessions[user_id]
-        await start_deployment(query, client)
+    try:
+        if data == "confirm_deploy":
+            if user_id not in user_sessions:
+                await query.edit_message_text(
+                    "⚠️ اتصال منقضی شده. دوباره /connect کنید."
+                )
+                return
 
-    elif query.data == "cancel_deploy":
-        await query.edit_message_text("❌ دپلوی لغو شد.")
+            client = user_sessions[user_id]
+            await start_deployment(query, client)
 
-    elif query.data == "help":
-        await query.edit_message_text(
-            "📋 دستورات ربات:\n\n"
-            "/start - شروع مجدد\n"
-            "/connect <token> - اتصال به Railway\n"
-            "/deploy - دپلوی 5 نمونه 3x-ui\n"
-            "/status - بررسی وضعیت\n"
-            "/disconnect - قطع اتصال",
-            parse_mode="HTML",
-        )
+        elif data == "cancel_deploy":
+            await query.edit_message_text("❌ دپلوی لغو شد.")
+
+        elif data == "show_help":
+            await query.edit_message_text(
+                "📋 دستورات ربات:\n\n"
+                "/start - شروع مجدد\n"
+                "/connect <token> - اتصال به Railway\n"
+                "/deploy - دپلوی 5 نمونه 3x-ui\n"
+                "/status - بررسی وضعیت\n"
+                "/disconnect - قطع اتصال",
+                parse_mode="HTML",
+            )
+
+    except Exception as e:
+        logger.error(f"Button handler error: {e}")
+        try:
+            await query.edit_message_text(
+                f"❌ خطا: <code>{str(e)}</code>",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
 
 
 async def start_deployment(query, client: RailwayClient):
