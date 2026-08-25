@@ -138,22 +138,6 @@ class XUIPanel:
         except Exception:
             return False
 
-
-def wait_for_panel(url: str, timeout: int = 60, interval: int = 5) -> bool:
-    """Wait for a panel to become accessible"""
-    # Ensure URL has /managepanel/ path
-    panel_url = url.rstrip("/") + "/managepanel/"
-    start = time.time()
-    while time.time() - start < timeout:
-        try:
-            resp = requests.get(panel_url, timeout=10, allow_redirects=True)
-            if resp.status_code == 200:
-                return True
-        except Exception:
-            pass
-        time.sleep(interval)
-    return False
-
     def add_inbound(self, inbound_data: dict) -> dict:
         """Add an inbound to the panel"""
         return self._post("/panel/api/inbounds/add", inbound_data)
@@ -215,3 +199,20 @@ def wait_for_panel(url: str, timeout: int = 60, interval: int = 5) -> bool:
             "listenning": ""
         }
         return self.add_inbound(inbound_data)
+
+
+def wait_for_panel(url: str, timeout: int = 60, interval: int = 5) -> bool:
+    """Wait for a panel to become accessible"""
+    # Ensure URL has /managepanel/ path
+    panel_url = url.rstrip("/") + "/managepanel/"
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            resp = requests.get(panel_url, timeout=10, allow_redirects=True)
+            if resp.status_code == 200:
+                return True
+        except Exception:
+            pass
+        time.sleep(interval)
+    return False
+
