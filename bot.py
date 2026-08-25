@@ -95,7 +95,11 @@ async def cmd_deploy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     # Step 2: Create project
     await status_msg.edit_text("✅ اکانت متصل شد\n\n🔨 <b>مرحله ۲/۵:</b> ایجاد پروژه...", parse_mode="HTML")
-    project = client.create_project(PROJECT_NAME, workspace_id)
+    try:
+        project = client.create_project(PROJECT_NAME, workspace_id)
+    except Exception as e:
+        await status_msg.edit_text(f"❌ خطا در ایجاد پروژه:\n<code>{str(e)[:200]}</code>", parse_mode="HTML")
+        return
     if not project:
         await status_msg.edit_text("❌ خطا در ایجاد پروژه", parse_mode="HTML")
         return
