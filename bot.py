@@ -24,7 +24,6 @@ PROJECT_NAME = os.getenv("PROJECT_NAME", "3x-ui-amir")
 # Service definitions: (name, region)
 SERVICES = [
     ("NL", "NL"),
-    ("US_C", "US-CA"),
     ("US_V", "US-VA"),
     ("SG", "SG"),
     ("NL_MT", "NL-MT"),
@@ -139,7 +138,7 @@ async def deploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔗 ریپو: <code>{REPO}</code>\n\n"
         "سرویس‌ها:\n"
         "━━━━━━━━━━━━━━━━\n"
-        "🇳🇱 NL\n🇺🇸 US_C\n🇺🇸 US_V\n🇸🇬 SG\n🇳🇱 NL_MT\n"
+        "🇳🇱 NL\n🇺🇸 US_V\n🇸🇬 SG\n🇳🇱 NL_MT\n"
         "━━━━━━━━━━━━━━━━\n\n"
         "تأیید می‌کنید؟",
         reply_markup=InlineKeyboardMarkup(keyboard),
