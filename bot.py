@@ -5,6 +5,7 @@ Deploy 4 instances of 3x-ui with automatic node connection
 
 import os
 import json
+import uuid
 import logging
 import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -328,8 +329,7 @@ async def cmd_connect_nodes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             panel = XUIPanel(svc_data["url"], XUI_USERNAME, XUI_PASSWORD)
             if await asyncio.to_thread(panel.login):
                 # Generate UUID for this panel's client
-                import uuid as uuid_lib
-                client_uuid = str(uuid_lib.uuid4())
+                client_uuid = str(uuid.uuid4())
                 
                 result = await asyncio.to_thread(
                     panel.create_vless_ws_inbound,
@@ -345,23 +345,26 @@ async def cmd_connect_nodes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     inbound_results.append(f"⚠️ {svc_name}: {result.get('msg', '')[:50]}")
 
         # Final status
-        nodes = await asyncio.to_thread(main_panel.get_nodes)
-        summary = "🔗 <b>وضعیت نودها:</b>\n\n"
-        for n in nodes:
-            summary += f"✅ {n.get('name')}: {n.get('status')}\n"
+        try:
+            nodes = await asyncio.to_thread(main_panel.get_nodes)
+            summary = "🔗 <b>وضعیت نودها:</b>\n\n"
+            for n in nodes:
+                summary += f"✅ {n.get('name')}: {n.get('status')}\n"
 
-        if inbound_results:
-            summary += "\n📥 <b>اینباندها:</b>\n"
-            for r in inbound_results:
-                summary += f"  {r}\n"
+            if inbound_results:
+                summary += "\n📥 <b>اینباندها:</b>\n"
+                for r in inbound_results:
+                    summary += f"  {r}\n"
 
-        summary += (
-            "\n━━━━━━━━━━━━━━━━\n"
-            "✅ <b>اتصال نودها انجام شد!</b>\n\n"
-            f"🔑 پیش‌فرض: <code>admin</code> / <code>admin</code>\n"
-            f"📊 پورت اینباند: <code>{INBOUND_CONFIG['port']}</code>\n"
-            f"🌐 مسیر WebSocket: <code>{INBOUND_CONFIG['path']}</code>"
-        )
+            summary += (
+                "\n━━━━━━━━━━━━━━━━\n"
+                "✅ <b>اتصال نودها انجام شد!</b>\n\n"
+                f"🔑 پیش‌فرض: <code>admin</code> / <code>admin</code>\n"
+                f"📊 پورت اینباند: <code>{INBOUND_CONFIG['port']}</code>\n"
+                f"🌐 مسیر WebSocket: <code>{INBOUND_CONFIG['path']}</code>"
+            )
+        except Exception as e:
+            summary = f"⚠️ خطا در نهایی: {str(e)[:100]}" 
 
         # Clear pending state
         ctx.user_data.pop("pending_services", None)
