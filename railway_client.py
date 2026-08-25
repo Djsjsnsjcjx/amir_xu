@@ -62,12 +62,8 @@ class RailwayClient:
                 email
                 username
                 workspaces {
-                    edges {
-                        node {
-                            id
-                            name
-                        }
-                    }
+                    id
+                    name
                 }
             }
         }

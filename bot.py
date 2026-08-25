@@ -100,8 +100,8 @@ async def connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         workspace_name = " شخصی"
         workspace_id = None
-        if user_info.get("workspaces", {}).get("edges"):
-            ws = user_info["workspaces"]["edges"][0]["node"]
+        if user_info.get("workspaces"):
+            ws = user_info["workspaces"][0]
             workspace_name = ws["name"]
             workspace_id = ws["id"]
 
