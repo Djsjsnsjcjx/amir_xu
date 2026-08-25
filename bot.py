@@ -108,7 +108,7 @@ async def cmd_deploy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     environment_id = project.get("environmentId", "")
     if not environment_id:
         envs = client.get_environments(project_id)
-        environment_id = envs[0]["id"] if envs else ""
+        environment_id = envs[0]["node"]["id"] if envs else ""
 
     # Step 3: Create services
     await status_msg.edit_text(
