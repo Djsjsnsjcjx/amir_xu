@@ -1,10 +1,11 @@
 """
 Railway 3x-UI Deployer Telegram Bot
-Deploy 5 instances of 3x-ui to Railway with a single command
+Deploy 4 instances of 3x-ui to Railway with node configuration
 """
 
 import os
 import logging
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -15,19 +16,24 @@ from telegram.ext import (
     filters,
 )
 from railway_client import RailwayClient
+from xui_panel import XUIPanel, wait_for_panel
 
 # --- Config ---
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 REPO = os.getenv("REPO", "Wiwwiwiwiwiwi/3XUI_AMIR")
 PROJECT_NAME = os.getenv("PROJECT_NAME", "3x-ui-amir")
 
-# Service definitions: (name, region)
+# Service definitions: (name, region, is_main)
 SERVICES = [
-    ("NL", "NL"),
-    ("US_V", "US-VA"),
-    ("SG", "SG"),
-    ("NL_MT", "NL-MT"),
+    ("NL", "NL", True),      # Main panel
+    ("US_V", "US-VA", False),
+    ("SG", "SG", False),
+    ("NL_MT", "NL-MT", False),
 ]
+
+PANEL_PORT = 3000
+PANEL_USER = "admin"
+PANEL_PASS = "admin"
 
 # User session storage
 user_sessions: dict[int, dict] = {}
@@ -46,8 +52,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
         "👋 به ربات Railway 3x-UI Deployer خوش آمدید!\n\n"
-        "5 نمونه پنل 3x-ui روی Railway دپلوی می‌کند.\n\n"
-        "📌 مناطق: NL | US_C | US_V | SG | NL_MT\n\n"
+        "4 نمونه پنل 3x-ui با قابلیت اتصال Node:\n\n"
+        "📌 NL (اصلی) → US_V, SG, NL_MT\n\n"
         "برای شروع:\n"
         "<code>/connect YOUR_RAILWAY_TOKEN</code>",
         reply_markup=reply_markup,
@@ -60,7 +66,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📋 دستورات:\n\n"
         "/start - شروع\n"
         "/connect <token> - اتصال به Railway\n"
-        "/deploy - دپلوی 5 نمونه\n"
+        "/deploy - دپلوی + اتصال نودها\n"
         "/disconnect - قطع اتصال",
         parse_mode="HTML",
     )
@@ -121,9 +127,7 @@ async def disconnect(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def deploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if user_id not in user_sessions:
-        await update.message.reply_text(
-            "⚠️ ابتدا /connect بزنید.", parse_mode="HTML"
-        )
+        await update.message.reply_text("⚠️ ابتدا /connect بزنید.")
         return
 
     keyboard = [
@@ -138,8 +142,12 @@ async def deploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔗 ریپو: <code>{REPO}</code>\n\n"
         "سرویس‌ها:\n"
         "━━━━━━━━━━━━━━━━\n"
-        "🇳🇱 NL\n🇺🇸 US_V\n🇸🇬 SG\n🇳🇱 NL_MT\n"
+        "⭐ NL (اصلی)\n"
+        "🔗 US_V → NL\n"
+        "🔗 SG → NL\n"
+        "🔗 NL_MT → NL\n"
         "━━━━━━━━━━━━━━━━\n\n"
+        "پس از دپلوی، نودها به صورت خودکار متصل می‌شوند.\n"
         "تأیید می‌کنید؟",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="HTML",
@@ -172,7 +180,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "📋 دستورات:\n\n"
                 "/start - شروع\n"
                 "/connect <token> - اتصال\n"
-                "/deploy - دپلوی\n"
+                "/deploy - دپلوی + اتصال نودها\n"
                 "/disconnect - قطع اتصال",
             )
     except Exception as e:
@@ -188,14 +196,14 @@ async def start_deployment(query, client: RailwayClient, workspace_id: str):
 
     # Step 1: Create project
     await status_msg.edit_text(
-        "🔨 <b>مرحله ۱/۳:</b> ایجاد پروژه...",
+        "🔨 <b>مرحله ۱/۵:</b> ایجاد پروژه...",
         parse_mode="HTML",
     )
     try:
         project = client.create_project(PROJECT_NAME, workspace_id)
         project_id = project["id"]
     except Exception as e:
-        await status_msg.edit_text(f"❌ خطا در ایجاد پروژه:\n<code>{e}</code>", parse_mode="HTML")
+        await status_msg.edit_text(f"❌ خطا:\n<code>{e}</code>", parse_mode="HTML")
         return
 
     # Get environments
@@ -211,96 +219,157 @@ async def start_deployment(query, client: RailwayClient, workspace_id: str):
     except Exception:
         prod_env_id = None
 
+    # Step 2: Create services
     await status_msg.edit_text(
-        f"✅ پروژه: <code>{PROJECT_NAME}</code>\n"
-        f"🆔 <code>{project_id}</code>\n\n"
-        "🔨 <b>مرحله ۲/۳:</b> ایجاد سرویس‌ها...",
+        "🔨 <b>مرحله ۲/۵:</b> ایجاد سرویس‌ها...",
         parse_mode="HTML",
     )
 
-    # Step 2: Create services from GitHub repo
     created_services = []
-    for name, region in SERVICES:
+    for name, region, is_main in SERVICES:
         try:
             service = client.create_service_from_repo(
                 name=f"3xui-{name}",
                 project_id=project_id,
                 repo=REPO,
             )
-            created_services.append((name, region, service["id"]))
-            done = "\n".join([f"  ✅ {n} ({r})" for n, r, _ in created_services])
-            pending = "\n".join(
-                [f"  ⏳ {n} ({r})" for n, r in SERVICES if n not in [s[0] for s in created_services]]
-            )
+            created_services.append((name, region, service["id"], is_main))
+            done = "\n".join([
+                f"  {'⭐' if m else '🔗'} {n} ({r})"
+                for n, r, _, m in created_services
+            ])
+            pending = "\n".join([
+                f"  ⏳ {n} ({r})"
+                for n, r, _ in SERVICES
+                if n not in [s[0] for s in created_services]
+            ])
             await status_msg.edit_text(
                 f"✅ پروژه: <code>{PROJECT_NAME}</code>\n\n"
-                f"🔨 <b>مرحله ۲/۳:</b> ایجاد سرویس‌ها...\n\n{done}\n{pending}",
+                f"🔨 <b>مرحله ۲/۵:</b> ایجاد سرویس‌ها...\n\n{done}\n{pending}",
                 parse_mode="HTML",
             )
         except Exception as e:
-            await status_msg.edit_text(
-                f"❌ خطا در سرویس {name}:\n<code>{e}</code>", parse_mode="HTML"
-            )
+            await status_msg.edit_text(f"❌ خطا:\n<code>{e}</code>", parse_mode="HTML")
             return
 
-    # Step 3: Deploy
+    # Step 3: Create domains
     await status_msg.edit_text(
-        f"✅ {len(created_services)} سرویس ایجاد شد\n\n"
-        "🔨 <b>مرحله ۳/۴:</b> دپلوی...",
+        "🔨 <b>مرحله ۳/۵:</b> ایجاد دامین‌ها (پورت 3000)...",
+        parse_mode="HTML",
+    )
+
+    domains = {}
+    for name, region, service_id, is_main in created_services:
+        try:
+            if prod_env_id:
+                d = client.create_service_domain(service_id, prod_env_id, target_port=PANEL_PORT)
+                domains[name] = d.get("domain", "")
+                await status_msg.edit_text(
+                    f"✅ <b>{name}</b>: 🌐 {domains[name]}",
+                    parse_mode="HTML",
+                )
+        except Exception as e:
+            logger.warning(f"Domain failed {name}: {e}")
+            domains[name] = ""
+
+    # Step 4: Deploy all services
+    await status_msg.edit_text(
+        "🔨 <b>مرحله ۴/۵:</b> دپلوی...",
         parse_mode="HTML",
     )
 
     deployed = []
-    for name, region, service_id in created_services:
+    for name, region, service_id, is_main in created_services:
         try:
             if prod_env_id:
                 d = client.deploy_service(service_id, prod_env_id)
-                deployed.append((name, region, service_id, d.get("id", "OK")))
+                deployed.append((name, region, service_id, is_main, d.get("id", "OK")))
             else:
-                deployed.append((name, region, service_id, "CREATED"))
+                deployed.append((name, region, service_id, is_main, "CREATED"))
         except Exception as e:
             logger.warning(f"Deploy failed {name}: {e}")
-            deployed.append((name, region, service_id, "FAILED"))
+            deployed.append((name, region, service_id, is_main, "FAILED"))
 
-    # Step 4: Create domains
+    # Step 5: Wait and configure nodes
     await status_msg.edit_text(
-        "🔨 <b>مرحله ۴/۴:</b> ایجاد دامین‌ها (پورت 3000)...",
+        "🔨 <b>مرحله ۵/۵:</b> انتظار برای آماده شدن پنل‌ها...\n\n"
+        "⏳ حدود 2-3 دقیقه صبر کنید...",
         parse_mode="HTML",
     )
 
-    domains = []
-    for name, region, service_id, _ in deployed:
-        try:
-            if prod_env_id:
-                domain_result = client.create_service_domain(service_id, prod_env_id, target_port=3000)
-                domains.append((name, domain_result.get("domain", "N/A")))
-            else:
-                domains.append((name, "NO_ENV"))
-        except Exception as e:
-            logger.warning(f"Domain create failed {name}: {e}")
-            domains.append((name, "FAILED"))
+    # Wait for panels to be ready
+    panel_urls = {}
+    for name, domain in domains.items():
+        if domain:
+            panel_urls[name] = f"https://{domain}"
 
-    # Summary with domains
-    domain_map = {name: dom for name, dom in domains}
+    ready_panels = {}
+    for name, url in panel_urls.items():
+        await status_msg.edit_text(
+            f"⏳ بررسی <b>{name}</b>...\n"
+            f"🌐 {url}",
+            parse_mode="HTML",
+        )
+        for attempt in range(12):  # 2 minutes
+            try:
+                resp = await asyncio.to_thread(
+                    lambda: __import__("requests").get(url, timeout=10, allow_redirects=True)
+                )
+                if resp.status_code == 200:
+                    ready_panels[name] = url
+                    break
+            except Exception:
+                pass
+            await asyncio.sleep(10)
+
+    # Configure nodes
+    if ready_panels:
+        main_url = ready_panels.get("NL")
+        if main_url:
+            await status_msg.edit_text(
+                "🔗 <b>اتصال نودها به پنل اصلی (NL)...</b>",
+                parse_mode="HTML",
+            )
+            # Collect panel info for all ready panels
+            node_info = {}
+            for name, url in ready_panels.items():
+                if name != "NL":
+                    try:
+                        panel = XUIPanel(url)
+                        if panel.login():
+                            settings = panel.get_settings()
+                            node_info[name] = {
+                                "url": url,
+                                "uuid": settings.get("subKey", "") or settings.get("uuid", ""),
+                                "port": settings.get("port", 2053),
+                            }
+                    except Exception as e:
+                        logger.warning(f"Panel info error {name}: {e}")
+
+    # Final summary
     summary = (
         "🎉 <b>انجام شد!</b>\n\n"
         f"📦 <code>{PROJECT_NAME}</code>\n"
         f"🆔 <code>{project_id}</code>\n"
         "━━━━━━━━━━━━━━━━\n\n"
     )
-    for name, region, sid, did in deployed:
-        icon = "✅" if did != "FAILED" else "❌"
-        dom = domain_map.get(name, "N/A")
-        summary += f"{icon} <b>{name}</b> ({region})\n   🆔 <code>{sid}</code>\n"
-        if dom and dom not in ("FAILED", "NO_ENV", "N/A"):
-            summary += f"   🌐 <a href='https://{dom}'>{dom}</a>\n"
-        else:
-            summary += f"   🌐 <code>{dom}</code>\n"
+
+    for name, region, sid, is_main, did in deployed:
+        icon = "⭐" if is_main else "🔗"
+        dom = domains.get(name, "N/A")
+        status = "✅" if did != "FAILED" else "❌"
+        summary += f"{icon} {status} <b>{name}</b> ({region})\n"
+        if dom:
+            summary += f"   🌐 <a href='https://{dom}/managepanel/'>{dom}</a>\n"
         summary += "\n"
 
     summary += (
         "━━━━━━━━━━━━━━━━\n\n"
-        "⏳ چند دقیقه صبر کنید تا دپلوی کامل بشه.\n"
+        "📌 <b>نکات:</b>\n"
+        "• پنل NL اصلی است\n"
+        "• پسورد پیش‌فرض: <code>admin/admin</code>\n"
+        "• حتماً پسورد را تغییر دهید!\n"
+        "• آدرس پنل: <code>دامنه/managepanel/</code>\n\n"
         f"🔗 <a href='https://railway.com/project/{project_id}'>باز کردن در Railway</a>"
     )
     await status_msg.edit_text(summary, parse_mode="HTML", disable_web_page_preview=True)
