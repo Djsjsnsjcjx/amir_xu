@@ -247,6 +247,133 @@ async def cmd_deploy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await status_msg.edit_text(summary, parse_mode="HTML")
 
 
+async def cmd_connect_nodes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Connect existing panels as nodes"""
+    token = ctx.user_data.get("railway_token")
+    if not token:
+        await update.message.reply_text("❌ اول /connect بزن.", parse_mode="HTML")
+        return
+
+    status_msg = await update.message.reply_text("🔍 بررسی پنل‌ها...", parse_mode="HTML")
+    client = RailwayClient(token)
+
+    # Get user info
+    user_info = client.get_me()
+    if not user_info:
+        await status_msg.edit_text("❌ خطا در اتصال", parse_mode="HTML")
+        return
+
+    # Find all projects and services
+    projects = client.list_projects()
+    if not projects:
+        await status_msg.edit_text("📭 پروژه‌ای وجود نداره.", parse_mode="HTML")
+        return
+
+    # Find services with domains
+    service_info = []
+    for proj in projects:
+        services = client.get_services(proj["id"])
+        for svc in services:
+            # Try to get domain
+            try:
+                envs = client.get_environments(proj["id"])
+                if envs:
+                    env_id = envs[0]["node"]["id"]
+                    domains = client.get_service_domains(proj["id"], env_id, svc["id"])
+                    if domains:
+                        domain = domains[0].get("domain", "")
+                        if domain:
+                            # Check if it's one of our panels
+                            for name, region in SERVICES:
+                                if name.lower() in svc["name"].lower() or region.lower() in svc["name"].lower():
+                                    service_info.append({
+                                        "name": name,
+                                        "region": region,
+                                        "id": svc["id"],
+                                        "domain": domain,
+                                        "url": f"https://{domain}",
+                                    })
+                                    break
+            except Exception:
+                pass
+
+    if not service_info:
+        await status_msg.edit_text("❌ پنلی پیدا نشد.", parse_mode="HTML")
+        return
+
+    await status_msg.edit_text(
+        f"✅ {len(service_info)} پنل پیدا شد\n\n⏳ بررسی آمادگی پنل‌ها...",
+        parse_mode="HTML",
+    )
+
+    # Wait for panels to be ready
+    ready_panels = {}
+    for svc in service_info:
+        if svc["url"]:
+            await status_msg.edit_text(
+                f"⏳ بررسی {svc['name']}...",
+                parse_mode="HTML",
+            )
+            if await asyncio.to_thread(wait_for_panel, svc["url"], 30):
+                ready_panels[svc["name"]] = svc
+                await status_msg.edit_text(
+                    f"✅ {svc['name']} آماده شد! ({len(ready_panels)}/{len(service_info)})",
+                    parse_mode="HTML",
+                )
+
+    # Connect nodes automatically
+    if MAIN_PANEL in ready_panels and len(ready_panels) > 1:
+        await status_msg.edit_text("🔗 اتصال خودکار نودها...", parse_mode="HTML")
+
+        main_svc = ready_panels[MAIN_PANEL]
+        main_panel = XUIPanel(main_svc["url"], XUI_USERNAME, XUI_PASSWORD)
+        
+        if await asyncio.to_thread(main_panel.login):
+            for svc_name, svc_data in ready_panels.items():
+                if svc_name == MAIN_PANEL:
+                    continue
+
+                await status_msg.edit_text(f"🔗 اتصال {svc_name}...", parse_mode="HTML")
+
+                node_panel = XUIPanel(svc_data["url"], XUI_USERNAME, XUI_PASSWORD)
+                if await asyncio.to_thread(node_panel.login):
+                    node_uuid = await asyncio.to_thread(node_panel.get_uuid)
+                    node_token = await asyncio.to_thread(node_panel.create_api_token)
+
+                    result = await asyncio.to_thread(
+                        main_panel.add_node, svc_name, svc_data["url"], node_uuid, node_token
+                    )
+
+                    if result.get("success"):
+                        await status_msg.edit_text(
+                            f"✅ {svc_name} متصل شد!",
+                            parse_mode="HTML",
+                        )
+                    else:
+                        await status_msg.edit_text(
+                            f"⚠️ خطا اتصال {svc_name}: {result.get('msg', '')[:100]}",
+                            parse_mode="HTML",
+                        )
+                else:
+                    await status_msg.edit_text(
+                        f"❌ ورود به {svc_name} ناموفق",
+                        parse_mode="HTML",
+                    )
+
+        # Show final status
+        nodes = await asyncio.to_thread(main_panel.get_nodes)
+        summary = "🔗 <b>وضعیت نودها:</b>\n\n"
+        for n in nodes:
+            summary += f"✅ {n.get('name')}: {n.get('status')}\n"
+        await status_msg.edit_text(summary, parse_mode="HTML")
+    else:
+        await status_msg.edit_text(
+            f"❌ پنل اصلی (NL) پیدا نشد یا پنل کافی نیست\n\n"
+            f"پنل‌های پیدا شده: {list(ready_panels.keys())}",
+            parse_mode="HTML",
+        )
+
+
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Show status of services"""
     token = ctx.user_data.get("railway_token")
@@ -314,8 +441,9 @@ async def cb_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "ℹ️ <b>راهنما</b>\n\n"
             "1. /connect TOKEN - اتصال به Railway\n"
             "2. /deploy - ساخت 4 پنل + اتصال نودها\n"
-            "3. /status - بررسی وضعیت\n"
-            "4. /delete - حذف پروژه\n\n"
+            "3. /connect-nodes - اتصال پنل‌های موجود\n"
+            "4. /status - بررسی وضعیت\n"
+            "5. /delete - حذف پروژه\n\n"
             "📌 نود اصلی: NL",
             parse_mode="HTML",
         )
@@ -342,6 +470,7 @@ def main():
     app.add_handler(CommandHandler("help", cmd_start))
     app.add_handler(CommandHandler("connect", cmd_connect))
     app.add_handler(CommandHandler("deploy", cmd_deploy))
+    app.add_handler(CommandHandler("connect-nodes", cmd_connect_nodes))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("delete", cmd_delete))
     app.add_handler(CallbackQueryHandler(cb_handler))

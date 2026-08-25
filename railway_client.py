@@ -202,3 +202,59 @@ class RailwayClient:
             "serviceId": service_id,
         })
         return data.get("domains", {}).get("serviceDomains", [])
+
+    def list_projects(self) -> list:
+        """List all projects"""
+        query = """
+        query {
+            me {
+                workspaces {
+                    projects(first: 50) {
+                        edges {
+                            node {
+                                id
+                                name
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+        data = self._query(query)
+        user = data.get("me")
+        if not user:
+            return []
+        projects = []
+        for ws in user.get("workspaces", []):
+            for edge in ws.get("projects", {}).get("edges", []):
+                projects.append(edge["node"])
+        return projects
+
+    def get_services(self, project_id: str) -> list:
+        """Get services for a project"""
+        query = """
+        query services($projectId: String!) {
+            services(input: { projectId: $projectId }) {
+                edges {
+                    node {
+                        id
+                        name
+                    }
+                }
+            }
+        }
+        """
+        data = self._query(query, {"projectId": project_id})
+        services = data.get("services", {}).get("edges", [])
+        return [s["node"] for s in services]
+
+    def delete_project(self, project_id: str) -> bool:
+        """Delete a project"""
+        query = """
+        mutation projectDelete($id: String!) {
+            projectDelete(id: $id)
+        }
+        """
+        data = self._query(query, {"id": project_id})
+        return data.get("projectDelete", False)
