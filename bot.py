@@ -4,6 +4,7 @@ Deploy 4 instances of 3x-ui with automatic node connection
 """
 
 import os
+import json
 import logging
 import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -31,10 +32,6 @@ SERVICES = [
 MAIN_PANEL = "NL"  # Main panel name
 XUI_USERNAME = os.getenv("XUI_USERNAME", "admin")
 XUI_PASSWORD = os.getenv("XUI_PASSWORD", "admin")
-
-
-def format_status(emoji: str, text: str) -> str:
-    return f"{emoji} {text}"
 
 
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -69,7 +66,7 @@ async def cmd_connect(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_deploy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Deploy 4 services and connect nodes"""
+    """Deploy 4 services (phase 1: create + deploy + domains)"""
     token = ctx.user_data.get("railway_token")
     if not token:
         await update.message.reply_text("❌ اول /connect بزن و توکنت رو بفرست.", parse_mode="HTML")
@@ -79,7 +76,7 @@ async def cmd_deploy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     client = RailwayClient(token)
 
     # Step 1: Get user info
-    await status_msg.edit_text("🔍 <b>مرحله ۱/۵:</b> بررسی اکانت...", parse_mode="HTML")
+    await status_msg.edit_text("🔍 <b>مرحله ۱/۴:</b> بررسی اکانت...", parse_mode="HTML")
     user_info = client.get_me()
     if not user_info:
         await status_msg.edit_text("❌ خطا در اتصال به Railway API", parse_mode="HTML")
@@ -89,13 +86,13 @@ async def cmd_deploy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if user_info.get("workspaces"):
         ws = user_info["workspaces"][0]
         workspace_id = ws["id"]
-    
+
     if not workspace_id:
         await status_msg.edit_text("❌ Workspace پیدا نشد", parse_mode="HTML")
         return
 
     # Step 2: Create project
-    await status_msg.edit_text("✅ اکانت متصل شد\n\n🔨 <b>مرحله ۲/۵:</b> ایجاد پروژه...", parse_mode="HTML")
+    await status_msg.edit_text("✅ اکانت متصل شد\n\n🔨 <b>مرحله ۲/۴:</b> ایجاد پروژه...", parse_mode="HTML")
     try:
         project = client.create_project(PROJECT_NAME, workspace_id)
     except Exception as e:
@@ -111,191 +108,130 @@ async def cmd_deploy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         envs = client.get_environments(project_id)
         environment_id = envs[0]["node"]["id"] if envs else ""
 
-    # Step 3: Create services
+    # Step 3: Create services + deploy + domains
     await status_msg.edit_text(
-        f"✅ پروژه ایجاد شد\n\n🔨 <b>مرحله ۳/۵:</b> ایجاد 4 سرویس...",
-        parse_mode="HTML",
-    )
-    created = []
-    for name, region in SERVICES:
-        svc = client.create_service_from_image(name, project_id, DOCKER_IMAGE)
-        if svc:
-            created.append((name, region, svc["id"]))
-            await status_msg.edit_text(
-                f"✅ پروژه ایجاد شد\n\n"
-                f"🔨 <b>مرحله ۳/۵:</b> سرویس {name} ✅",
-                parse_mode="HTML",
-            )
-
-    # Step 4: Deploy
-    await status_msg.edit_text(
-        f"✅ {len(created)} سرویس ایجاد شد\n\n🚀 <b>مرحله ۴/۵:</b> دپلوی...",
-        parse_mode="HTML",
-    )
-    for name, region, svc_id in created:
-        client.deploy_service(svc_id, environment_id)
-
-    # Step 5: Wait and connect nodes
-    await status_msg.edit_text(
-        f"✅ {len(created)} سرویس دپلوی شد\n\n⏳ <b>مرحله ۵/۵:</b> انتظار برای آماده شدن پنل‌ها...",
+        f"✅ پروژه ایجاد شد\n\n🔨 <b>مرحله ۳/۴:</b> ایجاد و دپلوی 4 سرویس...",
         parse_mode="HTML",
     )
 
-    # Collect service info
     service_info = []
-    for name, region, svc_id in created:
+    for name, region in SERVICES:
+        await status_msg.edit_text(
+            f"🔨 ساخت {name}...",
+            parse_mode="HTML",
+        )
+        svc = client.create_service_from_image(name, project_id, DOCKER_IMAGE)
+        if not svc:
+            continue
+
+        # Deploy
+        client.deploy_service(svc["id"], environment_id)
+
         # Create domain
+        await status_msg.edit_text(
+            f"🌐 ایجاد دامین {name}...",
+            parse_mode="HTML",
+        )
+        domain = ""
         try:
-            domain_data = client.create_service_domain(svc_id, environment_id, 3000)
+            domain_data = client.create_service_domain(svc["id"], environment_id, 3000)
             domain = domain_data.get("domain", "")
         except Exception:
-            domain = ""
+            pass
+
         service_info.append({
             "name": name,
             "region": region,
-            "id": svc_id,
+            "id": svc["id"],
             "domain": domain,
             "url": f"https://{domain}" if domain else "",
         })
 
-    # Wait for panels to be ready
-    ready_panels = {}
-    for svc in service_info:
-        if svc["url"]:
-            await status_msg.edit_text(
-                f"⏳ بررسی {svc['name']}...",
-                parse_mode="HTML",
-            )
-            if await asyncio.to_thread(wait_for_panel, svc["url"], 180):
-                ready_panels[svc["name"]] = svc
-                await status_msg.edit_text(
-                    f"✅ {svc['name']} آماده شد! ({len(ready_panels)}/{len(service_info)})",
-                    parse_mode="HTML",
-                )
+    if not service_info:
+        await status_msg.edit_text("❌ هیچ سرویسی ساخته نشد", parse_mode="HTML")
+        return
 
-    # Connect nodes automatically
-    if MAIN_PANEL in ready_panels and len(ready_panels) > 1:
-        await status_msg.edit_text("🔗 اتصال خودکار نودها...", parse_mode="HTML")
+    # Save state for phase 2
+    ctx.user_data["pending_services"] = service_info
+    ctx.user_data["project_id"] = project_id
+    ctx.user_data["environment_id"] = environment_id
 
-        main_svc = ready_panels[MAIN_PANEL]
-        main_panel = XUIPanel(main_svc["url"], XUI_USERNAME, XUI_PASSWORD)
-        
-        if await asyncio.to_thread(main_panel.login):
-            # Login to main panel and get UUID
-            main_uuid = await asyncio.to_thread(main_panel.get_uuid)
-
-            for svc_name, svc_data in ready_panels.items():
-                if svc_name == MAIN_PANEL:
-                    continue
-
-                await status_msg.edit_text(f"🔗 اتصال {svc_name}...", parse_mode="HTML")
-
-                node_panel = XUIPanel(svc_data["url"], XUI_USERNAME, XUI_PASSWORD)
-                if await asyncio.to_thread(node_panel.login):
-                    node_uuid = await asyncio.to_thread(node_panel.get_uuid)
-                    node_token = await asyncio.to_thread(node_panel.create_api_token)
-
-                    result = await asyncio.to_thread(
-                        main_panel.add_node, svc_name, svc_data["url"], node_uuid, node_token
-                    )
-
-                    if result.get("success"):
-                        await status_msg.edit_text(
-                            f"✅ {svc_name} متصل شد!",
-                            parse_mode="HTML",
-                        )
-                    else:
-                        await status_msg.edit_text(
-                            f"⚠️ خطا اتصال {svc_name}: {result.get('msg', '')[:100]}",
-                            parse_mode="HTML",
-                        )
-                else:
-                    await status_msg.edit_text(
-                        f"❌ ورود به {svc_name} ناموفق",
-                        parse_mode="HTML",
-                    )
-
-    # Final summary
+    # Build summary with panel URLs
     summary = (
-        "🎉 <b>انجام شد!</b>\n\n"
-        f"📦 <code>{PROJECT_NAME}</code>\n"
-        f"🆔 <code>{project_id}</code>\n"
+        "✅ <b>مرحله ۱ انجام شد!</b>\n\n"
+        f"📦 پروژه: <code>{PROJECT_NAME}</code>\n"
         "━━━━━━━━━━━━━━━━\n\n"
     )
     for svc in service_info:
-        status = "✅" if svc["name"] in ready_panels else "⏳"
+        status = "✅" if svc["url"] else "⏳"
         summary += f"{status} <b>{svc['name']}</b> ({svc['region']})\n"
         if svc["url"]:
-            summary += f"   🌐 <a href=\"{svc['url']}/managepanel/\">{svc['url']}</a>\n"
+            summary += f"   🌐 <a href=\"{svc['url']}/managepanel/\">{svc['url']}/managepanel/</a>\n"
         summary += "\n"
 
-    if MAIN_PANEL in ready_panels:
-        main_panel = XUIPanel(ready_panels[MAIN_PANEL]["url"], XUI_USERNAME, XUI_PASSWORD)
-        if await asyncio.to_thread(main_panel.login):
-            nodes = await asyncio.to_thread(main_panel.get_nodes)
-            if nodes:
-                summary += "🔗 <b>نودهای متصل:</b>\n"
-                for n in nodes:
-                    summary += f"  ✅ {n.get('name')}: {n.get('status')}\n"
-
     summary += (
-        "\n━━━━━━━━━━━━━━━━\n"
-        f"🔑 پیش‌فرض: <code>admin</code> / <code>admin</code>\n"
-        f"📊 اینباندها: 4"
+        "━━━━━━━━━━━━━━━━\n"
+        "🔑 پیش‌فرض: <code>admin</code> / <code>admin</code>\n\n"
+        "📌 <b>مرحله ۲: تنظیم ریجن‌ها</b>\n"
+        "روی هر پنل لاگین کن و ریجن رو تنظیم کن.\n\n"
+        "وقتی آماده بودی /connectnodes بزن.\n\n"
+        "🔄 همچنین می‌تونی اکانت Railway جدید بدی:\n"
+        "<code>/connect TOKEN_جدید</code>"
     )
 
     await status_msg.edit_text(summary, parse_mode="HTML")
 
 
 async def cmd_connect_nodes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    """Connect existing panels as nodes"""
+    """Connect existing panels as nodes (phase 2)"""
     token = ctx.user_data.get("railway_token")
     if not token:
         await update.message.reply_text("❌ اول /connect بزن.", parse_mode="HTML")
         return
 
     status_msg = await update.message.reply_text("🔍 بررسی پنل‌ها...", parse_mode="HTML")
-    client = RailwayClient(token)
 
-    # Get user info
-    user_info = client.get_me()
-    if not user_info:
-        await status_msg.edit_text("❌ خطا در اتصال", parse_mode="HTML")
-        return
+    # Check if we have saved service info from /deploy
+    saved_services = ctx.user_data.get("pending_services")
+    if saved_services:
+        service_info = saved_services
+    else:
+        # Discover services from Railway API
+        client = RailwayClient(token)
+        user_info = client.get_me()
+        if not user_info:
+            await status_msg.edit_text("❌ خطا در اتصال", parse_mode="HTML")
+            return
 
-    # Find all projects and services
-    projects = client.list_projects()
-    if not projects:
-        await status_msg.edit_text("📭 پروژه‌ای وجود نداره.", parse_mode="HTML")
-        return
+        projects = client.list_projects()
+        if not projects:
+            await status_msg.edit_text("📭 پروژه‌ای وجود نداره.", parse_mode="HTML")
+            return
 
-    # Find services with domains
-    service_info = []
-    for proj in projects:
-        services = client.get_services(proj["id"])
-        for svc in services:
-            # Try to get domain
-            try:
-                envs = client.get_environments(proj["id"])
-                if envs:
-                    env_id = envs[0]["node"]["id"]
-                    domains = client.get_service_domains(proj["id"], env_id, svc["id"])
-                    if domains:
-                        domain = domains[0].get("domain", "")
-                        if domain:
-                            # Check if it's one of our panels
-                            for name, region in SERVICES:
-                                if name.lower() in svc["name"].lower() or region.lower() in svc["name"].lower():
-                                    service_info.append({
-                                        "name": name,
-                                        "region": region,
-                                        "id": svc["id"],
-                                        "domain": domain,
-                                        "url": f"https://{domain}",
-                                    })
-                                    break
-            except Exception:
-                pass
+        service_info = []
+        for proj in projects:
+            services = client.get_services(proj["id"])
+            for svc in services:
+                try:
+                    envs = client.get_environments(proj["id"])
+                    if envs:
+                        env_id = envs[0]["node"]["id"]
+                        domains = client.get_service_domains(proj["id"], env_id, svc["id"])
+                        if domains:
+                            domain = domains[0].get("domain", "")
+                            if domain:
+                                for name, region in SERVICES:
+                                    if name.lower() in svc["name"].lower():
+                                        service_info.append({
+                                            "name": name,
+                                            "region": region,
+                                            "id": svc["id"],
+                                            "domain": domain,
+                                            "url": f"https://{domain}",
+                                        })
+                                        break
+                except Exception:
+                    pass
 
     if not service_info:
         await status_msg.edit_text("❌ پنلی پیدا نشد.", parse_mode="HTML")
@@ -310,30 +246,42 @@ async def cmd_connect_nodes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     ready_panels = {}
     for svc in service_info:
         if svc["url"]:
-            await status_msg.edit_text(
-                f"⏳ بررسی {svc['name']}...",
-                parse_mode="HTML",
-            )
-            if await asyncio.to_thread(wait_for_panel, svc["url"], 30):
-                ready_panels[svc["name"]] = svc
+            try:
                 await status_msg.edit_text(
-                    f"✅ {svc['name']} آماده شد! ({len(ready_panels)}/{len(service_info)})",
+                    f"⏳ بررسی {svc['name']}...",
                     parse_mode="HTML",
                 )
+            except Exception:
+                pass
+            if await asyncio.to_thread(wait_for_panel, svc["url"], 60):
+                ready_panels[svc["name"]] = svc
+                try:
+                    await status_msg.edit_text(
+                        f"✅ {svc['name']} آماده شد! ({len(ready_panels)}/{len(service_info)})",
+                        parse_mode="HTML",
+                    )
+                except Exception:
+                    pass
 
     # Connect nodes automatically
     if MAIN_PANEL in ready_panels and len(ready_panels) > 1:
-        await status_msg.edit_text("🔗 اتصال خودکار نودها...", parse_mode="HTML")
+        try:
+            await status_msg.edit_text("🔗 اتصال خودکار نودها...", parse_mode="HTML")
+        except Exception:
+            pass
 
         main_svc = ready_panels[MAIN_PANEL]
         main_panel = XUIPanel(main_svc["url"], XUI_USERNAME, XUI_PASSWORD)
-        
+
         if await asyncio.to_thread(main_panel.login):
             for svc_name, svc_data in ready_panels.items():
                 if svc_name == MAIN_PANEL:
                     continue
 
-                await status_msg.edit_text(f"🔗 اتصال {svc_name}...", parse_mode="HTML")
+                try:
+                    await status_msg.edit_text(f"🔗 اتصال {svc_name}...", parse_mode="HTML")
+                except Exception:
+                    pass
 
                 node_panel = XUIPanel(svc_data["url"], XUI_USERNAME, XUI_PASSWORD)
                 if await asyncio.to_thread(node_panel.login):
@@ -345,33 +293,55 @@ async def cmd_connect_nodes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     )
 
                     if result.get("success"):
-                        await status_msg.edit_text(
-                            f"✅ {svc_name} متصل شد!",
-                            parse_mode="HTML",
-                        )
+                        try:
+                            await status_msg.edit_text(
+                                f"✅ {svc_name} متصل شد!",
+                                parse_mode="HTML",
+                            )
+                        except Exception:
+                            pass
                     else:
+                        try:
+                            await status_msg.edit_text(
+                                f"⚠️ خطا اتصال {svc_name}: {result.get('msg', '')[:100]}",
+                                parse_mode="HTML",
+                            )
+                        except Exception:
+                            pass
+                else:
+                    try:
                         await status_msg.edit_text(
-                            f"⚠️ خطا اتصال {svc_name}: {result.get('msg', '')[:100]}",
+                            f"❌ ورود به {svc_name} ناموفق",
                             parse_mode="HTML",
                         )
-                else:
-                    await status_msg.edit_text(
-                        f"❌ ورود به {svc_name} ناموفق",
-                        parse_mode="HTML",
-                    )
+                    except Exception:
+                        pass
 
-        # Show final status
+        # Final status
         nodes = await asyncio.to_thread(main_panel.get_nodes)
         summary = "🔗 <b>وضعیت نودها:</b>\n\n"
         for n in nodes:
             summary += f"✅ {n.get('name')}: {n.get('status')}\n"
+
+        summary += (
+            "\n━━━━━━━━━━━━━━━━\n"
+            "✅ <b>اتصال نودها انجام شد!</b>"
+        )
+
+        # Clear pending state
+        ctx.user_data.pop("pending_services", None)
+
         await status_msg.edit_text(summary, parse_mode="HTML")
     else:
-        await status_msg.edit_text(
-            f"❌ پنل اصلی (NL) پیدا نشد یا پنل کافی نیست\n\n"
-            f"پنل‌های پیدا شده: {list(ready_panels.keys())}",
-            parse_mode="HTML",
-        )
+        try:
+            await status_msg.edit_text(
+                f"❌ پنل اصلی (NL) پیدا نشد یا پنل کافی نیست\n\n"
+                f"پنل‌های آماده: {list(ready_panels.keys())}\n\n"
+                "💡 مطمئن شو پنل‌ها دپلوی شدن و ریجن تنظیم شده.",
+                parse_mode="HTML",
+            )
+        except Exception:
+            pass
 
 
 async def cmd_status(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -440,10 +410,11 @@ async def cb_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             "ℹ️ <b>راهنما</b>\n\n"
             "1. /connect TOKEN - اتصال به Railway\n"
-            "2. /deploy - ساخت 4 پنل + اتصال نودها\n"
-            "3. /connectnodes - اتصال پنل‌های موجود\n"
-            "4. /status - بررسی وضعیت\n"
-            "5. /delete - حذف پروژه\n\n"
+            "2. /deploy - ساخت 4 پنل\n"
+            "3. ⏳ تنظیم ریجن‌ها روی پنل‌ها\n"
+            "4. /connectnodes - اتصال نودها\n"
+            "5. /status - بررسی وضعیت\n"
+            "6. /delete - حذف پروژه\n\n"
             "📌 نود اصلی: NL",
             parse_mode="HTML",
         )
