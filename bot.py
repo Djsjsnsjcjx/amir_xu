@@ -21,6 +21,15 @@ REPO_NAME = os.getenv("REPO_NAME", "Wiwwiwiwiwiwi/3XUI_AMIR")
 DOCKER_IMAGE = os.getenv("DOCKER_IMAGE", "ghcr.io/djsjsnsjcjx/3xui_amir:latest")
 PROJECT_NAME = os.getenv("PROJECT_NAME", "3x-ui-amir")
 
+# Inbound configuration
+INBOUND_CONFIG = {
+    "protocol": "vless",
+    "port": 8080,
+    "network": "ws",
+    "security": "none",
+    "path": "/cdn",
+}
+
 # Service definitions: (name, region)
 SERVICES = [
     ("NL", "NL"),
@@ -491,11 +500,3 @@ def main():
 if __name__ == "__main__":
     main()
 
-# Inbound configuration
-INBOUND_CONFIG = {
-    "protocol": "vless",
-    "port": 8080,
-    "network": "ws",
-    "security": "none",
-    "path": "/cdn",
-}
