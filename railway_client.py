@@ -154,17 +154,14 @@ class RailwayClient:
         """Deploy a service"""
         query = """
         mutation serviceInstanceDeploy($serviceId: String!, $environmentId: String!) {
-            serviceInstanceDeploy(serviceId: $serviceId, environmentId: $environmentId) {
-                id
-                status
-            }
+            serviceInstanceDeploy(serviceId: $serviceId, environmentId: $environmentId)
         }
         """
         data = self._query(query, {"serviceId": service_id, "environmentId": environment_id})
-        deployment = data.get("serviceInstanceDeploy")
-        if not deployment:
+        result = data.get("serviceInstanceDeploy")
+        if not result:
             raise Exception("خطا در شروع دپلوی")
-        return deployment
+        return {"success": result}
 
     def create_service_domain(self, service_id: str, environment_id: str, target_port: int = 3000) -> dict:
         """Create a public domain for a service"""
