@@ -4,6 +4,7 @@ Handles all interactions with Railway's API v2
 """
 
 import requests
+import json
 import logging
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,9 @@ class RailwayClient:
         if variables:
             payload["variables"] = variables
 
+        logger.info(f"GraphQL Request: {query[:200]}...")
+        logger.info(f"Variables: {json.dumps(variables, default=str)[:200]}")
+
         try:
             resp = requests.post(
                 RAILWAY_API_URL,
@@ -32,7 +36,13 @@ class RailwayClient:
                 headers=self.headers,
                 timeout=30,
             )
-            resp.raise_for_status()
+            
+            logger.info(f"Response status: {resp.status_code}")
+            logger.info(f"Response body: {resp.text[:500]}")
+
+            if resp.status_code != 200:
+                raise Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
+
             data = resp.json()
 
             if "errors" in data:
@@ -115,31 +125,6 @@ class RailwayClient:
             raise Exception(f"خطا در ایجاد سرویس {name}")
         return service
 
-    def create_service_from_repo(
-        self, name: str, project_id: str, repo: str, branch: str = "main"
-    ) -> dict:
-        """Create a service from a GitHub repository"""
-        query = """
-        mutation serviceCreate($input: ServiceCreateInput!) {
-            serviceCreate(input: $input) {
-                id
-                name
-            }
-        }
-        """
-        input_data = {
-            "name": name,
-            "projectId": project_id,
-            "source": {
-                "image": f"ghcr.io/{repo}:latest",
-            },
-        }
-        data = self._query(query, {"input": input_data})
-        service = data.get("serviceCreate")
-        if not service or not service.get("id"):
-            raise Exception(f"خطا در ایجاد سرویس {name}")
-        return service
-
     def trigger_deployment(self, service_id: str) -> dict:
         """Trigger a new deployment for a service"""
         query = """
@@ -156,42 +141,6 @@ class RailwayClient:
         if not deployment:
             raise Exception("خطا در شروع دپلوی")
         return deployment
-
-    def set_environment_variable(
-        self, service_id: str, name: str, value: str
-    ) -> bool:
-        """Set an environment variable for a service"""
-        query = """
-        mutation variableUpdate($input: VariableUpdateInput!) {
-            variableUpdate(input: $input) {
-                id
-            }
-        }
-        """
-        input_data = {
-            "serviceId": service_id,
-            "name": name,
-            "value": value,
-        }
-        try:
-            data = self._query(query, {"input": input_data})
-            return bool(data.get("variableUpdate"))
-        except Exception:
-            logger.warning(f"Failed to set env var {name} for service {service_id}")
-            return False
-
-    def get_service_domains(self, service_id: str) -> list:
-        """Get domains for a service"""
-        query = """
-        query serviceDomains($serviceId: String!) {
-            serviceDomains(serviceId: $serviceId) {
-                id
-                domain
-            }
-        }
-        """
-        data = self._query(query, {"serviceId": service_id})
-        return data.get("serviceDomains", [])
 
     def get_deployment_status(self, service_id: str) -> dict:
         """Get latest deployment status for a service"""
