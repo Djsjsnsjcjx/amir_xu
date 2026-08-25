@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 REPO_NAME = os.getenv("REPO_NAME", "Wiwwiwiwiwiwi/3XUI_AMIR")
-DOCKER_IMAGE = os.getenv("DOCKER_IMAGE", "ghcr.io/wiwwiwiwiwiwi/3xui_amir:latest")
+DOCKER_IMAGE = os.getenv("DOCKER_IMAGE", "ghcr.io/djsjsnsjcjx/3xui_amir:latest")
 PROJECT_NAME = os.getenv("PROJECT_NAME", "3x-ui-amir")
 
 # Service definitions: (name, region)
