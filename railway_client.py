@@ -234,19 +234,24 @@ class RailwayClient:
     def get_services(self, project_id: str) -> list:
         """Get services for a project"""
         query = """
-        query services($projectId: String!) {
-            services(input: { projectId: $projectId }) {
-                edges {
-                    node {
-                        id
-                        name
+        query project($id: String!) {
+            project(id: $id) {
+                services(first: 50) {
+                    edges {
+                        node {
+                            id
+                            name
+                        }
                     }
                 }
             }
         }
         """
-        data = self._query(query, {"projectId": project_id})
-        services = data.get("services", {}).get("edges", [])
+        data = self._query(query, {"id": project_id})
+        project = data.get("project")
+        if not project:
+            return []
+        services = project.get("services", {}).get("edges", [])
         return [s["node"] for s in services]
 
     def delete_project(self, project_id: str) -> bool:
