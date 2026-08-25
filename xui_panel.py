@@ -79,8 +79,38 @@ class XUIPanel:
         except Exception:
             return False
 
+    def get_nodes(self) -> list:
+        """Get list of configured nodes"""
+        url = f"{self.base_url}/api/panel/getClients"
+        try:
+            resp = self.session.post(url, timeout=15)
+            data = resp.json()
+            if data.get("success"):
+                return data.get("obj", [])
+            return []
+        except Exception as e:
+            logger.warning(f"Get nodes error: {e}")
+            return []
 
-def wait_for_panel(url: str, timeout: int = 120, interval: int = 10) -> bool:
+    def add_node(self, node_url: str, node_port: int, node_user: str, node_pass: str) -> bool:
+        """Add a node to this panel"""
+        url = f"{self.base_url}/api/panel/addClient"
+        try:
+            resp = self.session.post(
+                url,
+                json={
+                    "settings": f'[{{"up":"{node_user}","down":"{node_pass}","total":0,"expired":0,"enable":true,"id":"","remark":"Node {node_url}"}}]'
+                },
+                timeout=15,
+            )
+            data = resp.json()
+            return data.get("success", False)
+        except Exception as e:
+            logger.warning(f"Add node error: {e}")
+            return False
+
+
+def wait_for_panel(url: str, timeout: int = 180, interval: int = 10) -> bool:
     """Wait for a panel to become accessible"""
     start = time.time()
     panel = XUIPanel(url)
@@ -94,92 +124,65 @@ def wait_for_panel(url: str, timeout: int = 120, interval: int = 10) -> bool:
     return False
 
 
-def setup_node_connection(
-    main_panel_url: str,
-    node_url: str,
-    node_name: str,
+def setup_all_nodes(
+    main_url: str,
+    node_urls: dict,
     main_creds: tuple = ("admin", "admin"),
     node_creds: tuple = ("admin", "admin"),
 ) -> dict:
     """
-    Add a node panel to the main panel.
-    Returns status information.
+    Configure all nodes with the main panel.
+    main_url: URL of the main panel (NL)
+    node_urls: dict of {name: url} for other panels
+    Returns status dict.
     """
-    result = {"node": node_name, "success": False, "message": ""}
+    results = {"main": main_url, "nodes": {}, "success": False}
 
-    # Login to node panel
-    node_panel = XUIPanel(node_url, *node_creds)
-    if not node_panel.login():
-        result["message"] = "Could not login to node panel"
-        return result
-
-    # Get node info
-    node_uuid = node_panel.get_panel_uuid()
-    node_settings = node_panel.get_settings()
-    node_port = node_settings.get("port", 2053)
+    # Wait for main panel
+    if not wait_for_panel(main_url, timeout=120):
+        results["error"] = "Main panel not ready"
+        return results
 
     # Login to main panel
-    main_panel = XUIPanel(main_panel_url, *main_creds)
+    main_panel = XUIPanel(main_url, *main_creds)
     if not main_panel.login():
-        result["message"] = "Could not login to main panel"
-        return result
+        results["error"] = "Could not login to main panel"
+        return results
 
-    # Get main panel settings
+    # Get main panel info
+    main_uuid = main_panel.get_panel_uuid()
     main_settings = main_panel.get_settings()
-    
-    # The node connection info
-    result["node_uuid"] = node_uuid
-    result["node_port"] = node_port
-    result["message"] = f"Node info collected. UUID: {node_uuid[:8]}..."
-    result["success"] = True
+    results["main_uuid"] = main_uuid
+    results["main_port"] = main_settings.get("port", 2053)
 
-    return result
+    # Process each node
+    for name, url in node_urls.items():
+        node_result = {"name": name, "url": url, "success": False}
 
+        # Wait for node panel
+        if not wait_for_panel(url, timeout=120):
+            node_result["error"] = "Node panel not ready"
+            results["nodes"][name] = node_result
+            continue
 
-def configure_all_nodes(
-    panels: dict,
-    main_name: str = "NL",
-    port: int = 3000,
-) -> list:
-    """
-    Configure all nodes with the main panel.
-    panels: dict of {name: domain_url}
-    """
-    results = []
-    main_url = panels.get(main_name)
+        # Login to node panel
+        node_panel = XUIPanel(url, *node_creds)
+        if not node_panel.login():
+            node_result["error"] = "Could not login to node panel"
+            results["nodes"][name] = node_result
+            continue
 
-    if not main_url:
-        return [{"success": False, "message": f"Main panel {main_name} not found"}]
+        # Get node info
+        node_uuid = node_panel.get_panel_uuid()
+        node_settings = node_panel.get_settings()
+        node_port = node_settings.get("port", 2053)
 
-    # Wait for all panels
-    for name, url in panels.items():
-        panel_url = f"https://{url}"
-        ready = wait_for_panel(panel_url, timeout=120)
-        if ready:
-            results.append({"node": name, "status": "ready"})
-        else:
-            results.append({"node": name, "status": "timeout"})
+        node_result["uuid"] = node_uuid
+        node_result["port"] = node_port
+        node_result["success"] = True
+        results["nodes"][name] = node_result
 
-    # Login to all panels and collect info
-    panel_info = {}
-    for name, url in panels.items():
-        panel_url = f"https://{url}"
-        panel = XUIPanel(panel_url)
-        if panel.login():
-            settings = panel.get_settings()
-            panel_info[name] = {
-                "url": panel_url,
-                "uuid": settings.get("subKey", "") or settings.get("uuid", ""),
-                "port": settings.get("port", 2053),
-            }
-        else:
-            panel_info[name] = {"url": panel_url, "uuid": "", "port": 0}
+        logger.info(f"Node {name}: UUID={node_uuid[:8]}..., Port={node_port}")
 
-    # For now, just collect info since node API varies by version
-    results.append({
-        "main_panel": main_name,
-        "panel_info": panel_info,
-        "message": "Panel info collected. Configure nodes in 3x-ui panel.",
-    })
-
+    results["success"] = True
     return results
