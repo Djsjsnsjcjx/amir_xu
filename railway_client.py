@@ -183,3 +183,22 @@ class RailwayClient:
         if not result:
             raise Exception("خطا در ایجاد دامین")
         return result
+
+    def get_service_domains(self, project_id: str, environment_id: str, service_id: str) -> list:
+        """Get domains for a service"""
+        query = """
+        query domains($projectId: String!, $environmentId: String!, $serviceId: String!) {
+            domains(projectId: $projectId, environmentId: $environmentId, serviceId: $serviceId) {
+                serviceDomains {
+                    id
+                    domain
+                }
+            }
+        }
+        """
+        data = self._query(query, {
+            "projectId": project_id,
+            "environmentId": environment_id,
+            "serviceId": service_id,
+        })
+        return data.get("domains", {}).get("serviceDomains", [])

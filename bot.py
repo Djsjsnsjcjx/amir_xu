@@ -144,8 +144,12 @@ async def cmd_deploy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Collect service info
     service_info = []
     for name, region, svc_id in created:
-        domains_data = client.get_service_domains(svc_id)
-        domain = domains_data.get("domain", "") if domains_data else ""
+        # Create domain
+        try:
+            domain_data = client.create_service_domain(svc_id, environment_id, 3000)
+            domain = domain_data.get("domain", "")
+        except Exception:
+            domain = ""
         service_info.append({
             "name": name,
             "region": region,
