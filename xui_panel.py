@@ -180,7 +180,7 @@ class XUIPanel:
                 "decryption": "none",
                 "fallbacks": []
             }),
-            "stream_settings": json.dumps({
+            "streamSettings": json.dumps({
                 "network": "ws",
                 "security": "none",
                 "wsSettings": {
