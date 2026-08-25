@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 REPO_NAME = os.getenv("REPO_NAME", "Wiwwiwiwiwiwi/3XUI_AMIR")
+DOCKER_IMAGE = os.getenv("DOCKER_IMAGE", "ghcr.io/wiwwiwiwiwiwi/3xui_amir:latest")
 PROJECT_NAME = os.getenv("PROJECT_NAME", "3x-ui-amir")
 
 # Service definitions: (name, region)
@@ -117,7 +118,7 @@ async def cmd_deploy(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     created = []
     for name, region in SERVICES:
-        svc = client.create_service_from_repo(project_id, REPO_NAME, name)
+        svc = client.create_service_from_image(name, project_id, DOCKER_IMAGE)
         if svc:
             created.append((name, region, svc["id"]))
             await status_msg.edit_text(
