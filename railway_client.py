@@ -165,3 +165,24 @@ class RailwayClient:
         if not deployment:
             raise Exception("خطا در شروع دپلوی")
         return deployment
+
+    def create_service_domain(self, service_id: str, environment_id: str, target_port: int = 3000) -> dict:
+        """Create a public domain for a service"""
+        query = """
+        mutation serviceDomainCreate($input: ServiceDomainCreateInput!) {
+            serviceDomainCreate(input: $input) {
+                id
+                domain
+            }
+        }
+        """
+        input_data = {
+            "serviceId": service_id,
+            "environmentId": environment_id,
+            "targetPort": target_port,
+        }
+        data = self._query(query, {"input": input_data})
+        result = data.get("serviceDomainCreate")
+        if not result:
+            raise Exception("خطا در ایجاد دامین")
+        return result

@@ -246,7 +246,7 @@ async def start_deployment(query, client: RailwayClient, workspace_id: str):
     # Step 3: Deploy
     await status_msg.edit_text(
         f"✅ {len(created_services)} سرویس ایجاد شد\n\n"
-        "🔨 <b>مرحله ۳/۳:</b> دپلوی...",
+        "🔨 <b>مرحله ۳/۴:</b> دپلوی...",
         parse_mode="HTML",
     )
 
@@ -262,7 +262,26 @@ async def start_deployment(query, client: RailwayClient, workspace_id: str):
             logger.warning(f"Deploy failed {name}: {e}")
             deployed.append((name, region, service_id, "FAILED"))
 
-    # Summary
+    # Step 4: Create domains
+    await status_msg.edit_text(
+        "🔨 <b>مرحله ۴/۴:</b> ایجاد دامین‌ها (پورت 3000)...",
+        parse_mode="HTML",
+    )
+
+    domains = []
+    for name, region, service_id, _ in deployed:
+        try:
+            if prod_env_id:
+                domain_result = client.create_service_domain(service_id, prod_env_id, target_port=3000)
+                domains.append((name, domain_result.get("domain", "N/A")))
+            else:
+                domains.append((name, "NO_ENV"))
+        except Exception as e:
+            logger.warning(f"Domain create failed {name}: {e}")
+            domains.append((name, "FAILED"))
+
+    # Summary with domains
+    domain_map = {name: dom for name, dom in domains}
     summary = (
         "🎉 <b>انجام شد!</b>\n\n"
         f"📦 <code>{PROJECT_NAME}</code>\n"
@@ -271,11 +290,17 @@ async def start_deployment(query, client: RailwayClient, workspace_id: str):
     )
     for name, region, sid, did in deployed:
         icon = "✅" if did != "FAILED" else "❌"
-        summary += f"{icon} <b>{name}</b> ({region})\n   🆔 <code>{sid}</code>\n   🚀 <code>{did}</code>\n\n"
+        dom = domain_map.get(name, "N/A")
+        summary += f"{icon} <b>{name}</b> ({region})\n   🆔 <code>{sid}</code>\n"
+        if dom and dom not in ("FAILED", "NO_ENV", "N/A"):
+            summary += f"   🌐 <a href='https://{dom}'>{dom}</a>\n"
+        else:
+            summary += f"   🌐 <code>{dom}</code>\n"
+        summary += "\n"
 
     summary += (
         "━━━━━━━━━━━━━━━━\n\n"
-        "⏳ چند دقیقه صبر کنید.\n"
+        "⏳ چند دقیقه صبر کنید تا دپلوی کامل بشه.\n"
         f"🔗 <a href='https://railway.com/project/{project_id}'>باز کردن در Railway</a>"
     )
     await status_msg.edit_text(summary, parse_mode="HTML", disable_web_page_preview=True)
