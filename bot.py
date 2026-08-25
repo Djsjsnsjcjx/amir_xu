@@ -32,17 +32,14 @@ SERVICES = [
     ("NL_MT", "NL-MT"),
 ]
 
-# User session storage (token per user)
-user_sessions: dict[int, RailwayClient] = {}
+# User session storage
+user_sessions: dict[int, dict] = {}
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
-
-
-# --- Handlers ---
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -100,17 +97,24 @@ async def connect(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         client = RailwayClient(token)
         user_info = client.get_me()
-        user_sessions[user_id] = client
+        
+        workspace_name = " شخصی"
+        workspace_id = None
+        if user_info.get("workspaces", {}).get("edges"):
+            ws = user_info["workspaces"]["edges"][0]["node"]
+            workspace_name = ws["name"]
+            workspace_id = ws["id"]
 
-        team_name = " شخصی"
-        if user_info.get("teams", {}).get("edges"):
-            team_name = user_info["teams"]["edges"][0]["node"]["name"]
+        user_sessions[user_id] = {
+            "client": client,
+            "workspace_id": workspace_id,
+        }
 
         await update.message.reply_text(
             f"✅ با موفقیت متصل شد!\n\n"
-            f"👤 نام: {user_info.get('name', 'N/A')}\n"
+            f"👤 نام: {user_info.get('name') or user_info.get('username', 'N/A')}\n"
             f"📧 ایمیل: {user_info.get('email', 'N/A')}\n"
-            f"🏢 تیم: {team_name}\n\n"
+            f"🏢 ورک‌اسپیس: {workspace_name}\n\n"
             f"حالا می‌توانید با /deploy شروع به دپلوی کنید!",
             parse_mode="HTML",
         )
@@ -143,9 +147,6 @@ async def deploy(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    client = user_sessions[user_id]
-
-    # Confirmation keyboard
     keyboard = [
         [
             InlineKeyboardButton("✅ بله، دپلوی کن", callback_data="confirm_deploy"),
@@ -184,8 +185,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     data = query.data
 
-    logger.info(f"Button pressed: {data} by user {user_id}")
-
     try:
         if data == "confirm_deploy":
             if user_id not in user_sessions:
@@ -194,8 +193,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
 
-            client = user_sessions[user_id]
-            await start_deployment(query, client)
+            session = user_sessions[user_id]
+            await start_deployment(query, session["client"], session.get("workspace_id"))
 
         elif data == "cancel_deploy":
             await query.edit_message_text("❌ دپلوی لغو شد.")
@@ -208,7 +207,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "/deploy - دپلوی 5 نمونه 3x-ui\n"
                 "/status - بررسی وضعیت\n"
                 "/disconnect - قطع اتصال",
-                parse_mode="HTML",
             )
 
     except Exception as e:
@@ -222,7 +220,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
 
-async def start_deployment(query, client: RailwayClient):
+async def start_deployment(query, client: RailwayClient, workspace_id: str = None):
     """Execute the deployment process"""
     status_msg = query.message
 
@@ -234,7 +232,7 @@ async def start_deployment(query, client: RailwayClient):
     )
 
     try:
-        project = client.create_project(PROJECT_NAME)
+        project = client.create_project(PROJECT_NAME, workspace_id)
         project_id = project["id"]
     except Exception as e:
         await status_msg.edit_text(
@@ -242,6 +240,19 @@ async def start_deployment(query, client: RailwayClient):
             parse_mode="HTML",
         )
         return
+
+    # Get environments (to find production environment ID)
+    try:
+        envs = client.get_environments(project_id)
+        prod_env_id = None
+        for env in envs:
+            if env["node"]["name"] == "production":
+                prod_env_id = env["node"]["id"]
+                break
+        if not prod_env_id and envs:
+            prod_env_id = envs[0]["node"]["id"]
+    except Exception:
+        prod_env_id = None
 
     await status_msg.edit_text(
         f"✅ پروژه ایجاد شد: <code>{PROJECT_NAME}</code>\n"
@@ -258,17 +269,13 @@ async def start_deployment(query, client: RailwayClient):
                 name=f"3x-ui-{name}",
                 project_id=project_id,
                 image=REPO_IMAGE,
+                environment_id=prod_env_id,
             )
             created_services.append((name, region, service["id"]))
             await status_msg.edit_text(
                 f"✅ پروژه: <code>{PROJECT_NAME}</code>\n\n"
                 f"🔨 <b>مرحله ۲ از ۳:</b> ایجاد سرویس‌ها...\n\n"
-                + "\n".join(
-                    [
-                        f"  ✅ {n} ({r})"
-                        for n, r, _ in created_services
-                    ]
-                )
+                + "\n".join([f"  ✅ {n} ({r})" for n, r, _ in created_services])
                 + "\n"
                 + "\n".join(
                     [
@@ -297,10 +304,13 @@ async def start_deployment(query, client: RailwayClient):
     deployed = []
     for name, region, service_id in created_services:
         try:
-            deployment = client.trigger_deployment(service_id)
-            deployed.append((name, region, service_id, deployment.get("id", "N/A")))
+            if prod_env_id:
+                deployment = client.deploy_service(service_id, prod_env_id)
+                deployed.append((name, region, service_id, deployment.get("id", "OK")))
+            else:
+                deployed.append((name, region, service_id, "CREATED"))
         except Exception as e:
-            logger.warning(f"Deployment trigger failed for {name}: {e}")
+            logger.warning(f"Deployment failed for {name}: {e}")
             deployed.append((name, region, service_id, "FAILED"))
 
     # Final summary
@@ -320,7 +330,6 @@ async def start_deployment(query, client: RailwayClient):
     summary += (
         "━━━━━━━━━━━━━━━━━━━━━\n\n"
         "⏳ دپلوی ممکن است چند دقیقه طول بکشد.\n"
-        "از /status برای بررسی وضعیت استفاده کنید.\n\n"
         "🔗 داشبورد: "
         f"<a href='https://railway.com/project/{project_id}'>باز کردن در Railway</a>"
     )
@@ -335,108 +344,16 @@ async def status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in user_sessions:
         await update.message.reply_text(
             "⚠️ ابتدا با /connect متصل شوید.",
-            parse_mode="HTML",
         )
         return
 
-    client = user_sessions[user_id]
-
     await update.message.reply_text("⏳ در حال بررسی وضعیت...")
-
-    try:
-        # Get user info to find projects
-        user_info = client.get_me()
-        team_edges = user_info.get("teams", {}).get("edges", [])
-
-        if not team_edges:
-            await update.message.reply_text("⚠️ تیمی یافت نشد.")
-            return
-
-        team_id = team_edges[0]["node"]["id"]
-
-        # Query projects
-        query = """
-        query {
-            projects {
-                edges {
-                    node {
-                        id
-                        name
-                    }
-                }
-            }
-        }
-        """
-        data = client._query(query)
-        projects = data.get("projects", {}).get("edges", [])
-
-        # Find our project
-        target_project = None
-        for p in projects:
-            if p["node"]["name"] == PROJECT_NAME:
-                target_project = p["node"]
-                break
-
-        if not target_project:
-            await update.message.reply_text(
-                f"⚠️ پروژه <code>{PROJECT_NAME}</code> یافت نشد.\n"
-                "اول /deploy را اجرا کنید.",
-                parse_mode="HTML",
-            )
-            return
-
-        # Get services in project
-        svc_query = """
-        query($projectId: String!) {
-            services(input: {projectId: $projectId}) {
-                edges {
-                    node {
-                        id
-                        name
-                    }
-                }
-            }
-        }
-        """
-        svc_data = client._query(svc_query, {"projectId": target_project["id"]})
-        services = svc_data.get("services", {}).get("edges", [])
-
-        if not services:
-            await update.message.reply_text("⚠️ سرویسی یافت نشد.")
-            return
-
-        msg = f"📊 <b>وضعیت پروژه {PROJECT_NAME}</b>\n\n"
-
-        for svc in services:
-            svc_id = svc["node"]["id"]
-            svc_name = svc["node"]["name"]
-
-            try:
-                deploy = client.get_deployment_status(svc_id)
-                status_text = deploy.get("status", "UNKNOWN")
-                status_icon = {
-                    "SUCCESS": "✅",
-                    "ACTIVE": "🟢",
-                    "INITIALIZING": "🔄",
-                    "BUILDING": "🔨",
-                    "DEPLOYING": "🚀",
-                    "REMOVING": "🗑️",
-                    "FAILED": "❌",
-                    "REMOVED": "❌",
-                    "CRASHED": "💥",
-                }.get(status_text, "❓")
-
-                msg += f"{status_icon} <b>{svc_name}</b>: {status_text}\n"
-            except Exception:
-                msg += f"❓ <b>{svc_name}</b>: UNKNOWN\n"
-
-        await update.message.reply_text(msg, parse_mode="HTML")
-
-    except Exception as e:
-        await update.message.reply_text(
-            f"❌ خطا در بررسی وضعیت:\n<code>{str(e)}</code>",
-            parse_mode="HTML",
-        )
+    # TODO: implement status check
+    await update.message.reply_text(
+        "📊 وضعیت دپلوی از طریق لینک زیر قابل بررسی است:\n"
+        f"<a href='https://railway.com'>باز کردن Railway</a>",
+        parse_mode="HTML",
+    )
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -449,38 +366,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
     """Handle errors"""
     logger.error(f"Exception while handling update: {context.error}")
-    if update and hasattr(update, "message") and update.message:
-        await update.message.reply_text(
-            "❌ خطایی رخ داد. لطفاً دوباره تلاش کنید."
-        )
 
 
 def main():
     """Start the bot"""
     if not BOT_TOKEN:
         print("❌ BOT_TOKEN environment variable is not set!")
-        print("Set it in Railway dashboard > Variables")
         return
 
     app = Application.builder().token(BOT_TOKEN).build()
 
-    # Command handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("connect", connect))
     app.add_handler(CommandHandler("disconnect", disconnect))
     app.add_handler(CommandHandler("deploy", deploy))
     app.add_handler(CommandHandler("status", status))
-
-    # Callback query handler for inline buttons
     app.add_handler(CallbackQueryHandler(button_handler))
-
-    # Fallback message handler
-    app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
-    )
-
-    # Error handler
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_error_handler(error_handler)
 
     print("🤖 Bot is starting...")

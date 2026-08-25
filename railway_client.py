@@ -26,9 +26,6 @@ class RailwayClient:
         if variables:
             payload["variables"] = variables
 
-        logger.info(f"GraphQL Request: {query[:200]}...")
-        logger.info(f"Variables: {json.dumps(variables, default=str)[:200]}")
-
         try:
             resp = requests.post(
                 RAILWAY_API_URL,
@@ -38,34 +35,33 @@ class RailwayClient:
             )
             
             logger.info(f"Response status: {resp.status_code}")
-            logger.info(f"Response body: {resp.text[:500]}")
 
+            if resp.status_code == 401:
+                raise Exception("توکن API نامعتبر است.")
+            
             if resp.status_code != 200:
-                raise Exception(f"HTTP {resp.status_code}: {resp.text[:200]}")
+                raise Exception(f"HTTP {resp.status_code}: {resp.text[:300]}")
 
             data = resp.json()
 
             if "errors" in data:
                 error_messages = [e.get("message", str(e)) for e in data["errors"]]
-                raise Exception(f"GraphQL errors: {'; '.join(error_messages)}")
+                raise Exception(f"API Error: {'; '.join(error_messages)}")
 
             return data.get("data", {})
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 401:
-                raise Exception("توکن API نامعتبر است. لطفاً توکن صحیح را وارد کنید.")
-            raise Exception(f"خطا در اتصال به Railway API: {e}")
         except requests.exceptions.ConnectionError:
-            raise Exception("خطا در اتصال به اینترنت. لطفاً اتصال خود را بررسی کنید.")
+            raise Exception("خطا در اتصال به اینترنت.")
 
     def get_me(self) -> dict:
-        """Get current user info and teams"""
+        """Get current user info and workspaces"""
         query = """
         query {
             me {
                 id
                 name
                 email
-                teams {
+                username
+                workspaces {
                     edges {
                         node {
                             id
@@ -82,11 +78,11 @@ class RailwayClient:
             raise Exception("نتوانست اطلاعات کاربر را دریافت کند")
         return user
 
-    def create_project(self, name: str, team_id: str = None) -> dict:
+    def create_project(self, name: str, workspace_id: str = None) -> dict:
         """Create a new project"""
         input_data = {"name": name}
-        if team_id:
-            input_data["teamId"] = team_id
+        if workspace_id:
+            input_data["workspaceId"] = workspace_id
 
         query = """
         mutation projectCreate($input: ProjectCreateInput!) {
@@ -103,9 +99,17 @@ class RailwayClient:
         return project
 
     def create_service_from_image(
-        self, name: str, project_id: str, image: str
+        self, name: str, project_id: str, image: str, environment_id: str = None
     ) -> dict:
         """Create a service from a Docker image"""
+        input_data = {
+            "projectId": project_id,
+            "name": name,
+            "source": {"image": image},
+        }
+        if environment_id:
+            input_data["environmentId"] = environment_id
+
         query = """
         mutation serviceCreate($input: ServiceCreateInput!) {
             serviceCreate(input: $input) {
@@ -114,77 +118,61 @@ class RailwayClient:
             }
         }
         """
-        input_data = {
-            "name": name,
-            "projectId": project_id,
-            "source": {"image": image},
-        }
         data = self._query(query, {"input": input_data})
         service = data.get("serviceCreate")
         if not service or not service.get("id"):
             raise Exception(f"خطا در ایجاد سرویس {name}")
         return service
 
-    def trigger_deployment(self, service_id: str) -> dict:
-        """Trigger a new deployment for a service"""
+    def deploy_service(self, service_id: str, environment_id: str) -> dict:
+        """Deploy a service"""
         query = """
-        mutation deploymentTrigger($input: DeploymentTriggerInput!) {
-            deploymentTrigger(input: $input) {
+        mutation serviceInstanceDeploy($serviceId: String!, $environmentId: String!) {
+            serviceInstanceDeploy(serviceId: $serviceId, environmentId: $environmentId) {
                 id
                 status
             }
         }
         """
-        input_data = {"serviceId": service_id}
-        data = self._query(query, {"input": input_data})
-        deployment = data.get("deploymentTrigger")
+        data = self._query(query, {"serviceId": service_id, "environmentId": environment_id})
+        deployment = data.get("serviceInstanceDeploy")
         if not deployment:
             raise Exception("خطا در شروع دپلوی")
         return deployment
 
-    def get_deployment_status(self, service_id: str) -> dict:
+    def get_environments(self, project_id: str) -> list:
+        """Get environments for a project"""
+        query = """
+        query environments($projectId: String!) {
+            environments(projectId: $projectId) {
+                edges {
+                    node {
+                        id
+                        name
+                    }
+                }
+            }
+        }
+        """
+        data = self._query(query, {"projectId": project_id})
+        return data.get("environments", {}).get("edges", [])
+
+    def get_deployment_status(self, service_id: str, environment_id: str) -> dict:
         """Get latest deployment status for a service"""
         query = """
-        query deployments($serviceId: String!) {
-            deployments(input: { serviceId: $serviceId, limit: 1 }) {
+        query deployments($serviceId: String!, $environmentId: String!) {
+            deployments(input: { serviceId: $serviceId, environmentId: $environmentId, limit: 1 }) {
                 edges {
                     node {
                         id
                         status
-                        createdAt
                     }
                 }
             }
         }
         """
-        data = self._query(query, {"serviceId": service_id})
+        data = self._query(query, {"serviceId": service_id, "environmentId": environment_id})
         deployments = data.get("deployments", {}).get("edges", [])
         if deployments:
             return deployments[0].get("node", {})
         return {}
-
-    def introspect(self) -> dict:
-        """Introspect the GraphQL schema (for debugging)"""
-        query = """
-        query {
-            __schema {
-                mutationType {
-                    fields {
-                        name
-                        args {
-                            name
-                            type {
-                                name
-                            }
-                        }
-                    }
-                }
-                queryType {
-                    fields {
-                        name
-                    }
-                }
-            }
-        }
-        """
-        return self._query(query)
