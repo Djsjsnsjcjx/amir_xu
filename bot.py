@@ -441,7 +441,7 @@ async def cb_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             "ℹ️ <b>راهنما</b>\n\n"
             "1. /connect TOKEN - اتصال به Railway\n"
             "2. /deploy - ساخت 4 پنل + اتصال نودها\n"
-            "3. /connect-nodes - اتصال پنل‌های موجود\n"
+            "3. /connectnodes - اتصال پنل‌های موجود\n"
             "4. /status - بررسی وضعیت\n"
             "5. /delete - حذف پروژه\n\n"
             "📌 نود اصلی: NL",
@@ -470,7 +470,7 @@ def main():
     app.add_handler(CommandHandler("help", cmd_start))
     app.add_handler(CommandHandler("connect", cmd_connect))
     app.add_handler(CommandHandler("deploy", cmd_deploy))
-    app.add_handler(CommandHandler("connect-nodes", cmd_connect_nodes))
+    app.add_handler(CommandHandler("connectnodes", cmd_connect_nodes))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CommandHandler("delete", cmd_delete))
     app.add_handler(CallbackQueryHandler(cb_handler))
