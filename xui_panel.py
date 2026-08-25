@@ -4,6 +4,7 @@ Handles interactions with 3x-ui panels for node management
 """
 
 import requests
+import json
 import re
 import logging
 import time
@@ -152,3 +153,65 @@ def wait_for_panel(url: str, timeout: int = 60, interval: int = 5) -> bool:
             pass
         time.sleep(interval)
     return False
+
+    def add_inbound(self, inbound_data: dict) -> dict:
+        """Add an inbound to the panel"""
+        return self._post("/panel/api/inbounds/add", inbound_data)
+
+    def list_inbounds(self) -> list:
+        """List all inbounds"""
+        data = self._get("/panel/api/inbounds/list")
+        return data.get("obj", [])
+
+    def delete_inbound(self, inbound_id: int) -> dict:
+        """Delete an inbound"""
+        return self._post(f"/panel/api/inbounds/del/{inbound_id}")
+
+    def create_vless_ws_inbound(self, uuid: str, email: str, path: str = "/cdn", port: int = 8080) -> dict:
+        """Create a VLESS WebSocket inbound"""
+        inbound_data = {
+            "up": 0,
+            "down": 0,
+            "total": 0,
+            "remark": f"VLESS-WS-{email}",
+            "enable": True,
+            "expiryTime": 0,
+            "listen": "",
+            "port": port,
+            "protocol": "vless",
+            "settings": json.dumps({
+                "clients": [
+                    {
+                        "id": uuid,
+                        "flow": "",
+                        "email": email,
+                        "limitIp": 0,
+                        "totalGB": 0,
+                        "expiredTime": 0,
+                        "enable": True,
+                        "tgId": 0,
+                        "subId": ""
+                    }
+                ],
+                "decryption": "none",
+                "fallbacks": []
+            }),
+            "stream_settings": json.dumps({
+                "network": "ws",
+                "security": "none",
+                "wsSettings": {
+                    "path": path,
+                    "headers": {
+                        "Host": ""
+                    }
+                }
+            }),
+            "sniffing": json.dumps({
+                "enabled": False,
+                "destOverride": [],
+                "routeOnly": False
+            }),
+            "tag": f"vless-ws-{email}",
+            "listenning": ""
+        }
+        return self.add_inbound(inbound_data)

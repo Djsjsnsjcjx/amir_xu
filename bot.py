@@ -317,15 +317,50 @@ async def cmd_connect_nodes(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                     except Exception:
                         pass
 
+        # Create inbounds on all panels
+        try:
+            await status_msg.edit_text("📥 ایجاد اینباند روی پنل‌ها...", parse_mode="HTML")
+        except Exception:
+            pass
+
+        inbound_results = []
+        for svc_name, svc_data in ready_panels.items():
+            panel = XUIPanel(svc_data["url"], XUI_USERNAME, XUI_PASSWORD)
+            if await asyncio.to_thread(panel.login):
+                # Generate UUID for this panel's client
+                import uuid as uuid_lib
+                client_uuid = str(uuid_lib.uuid4())
+                
+                result = await asyncio.to_thread(
+                    panel.create_vless_ws_inbound,
+                    client_uuid,
+                    f"{svc_name}-user",
+                    INBOUND_CONFIG["path"],
+                    INBOUND_CONFIG["port"],
+                )
+                
+                if result.get("success"):
+                    inbound_results.append(f"✅ {svc_name}: اینباند ایجاد شد")
+                else:
+                    inbound_results.append(f"⚠️ {svc_name}: {result.get('msg', '')[:50]}")
+
         # Final status
         nodes = await asyncio.to_thread(main_panel.get_nodes)
         summary = "🔗 <b>وضعیت نودها:</b>\n\n"
         for n in nodes:
             summary += f"✅ {n.get('name')}: {n.get('status')}\n"
 
+        if inbound_results:
+            summary += "\n📥 <b>اینباندها:</b>\n"
+            for r in inbound_results:
+                summary += f"  {r}\n"
+
         summary += (
             "\n━━━━━━━━━━━━━━━━\n"
-            "✅ <b>اتصال نودها انجام شد!</b>"
+            "✅ <b>اتصال نودها انجام شد!</b>\n\n"
+            f"🔑 پیش‌فرض: <code>admin</code> / <code>admin</code>\n"
+            f"📊 پورت اینباند: <code>{INBOUND_CONFIG['port']}</code>\n"
+            f"🌐 مسیر WebSocket: <code>{INBOUND_CONFIG['path']}</code>"
         )
 
         # Clear pending state
@@ -452,3 +487,12 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# Inbound configuration
+INBOUND_CONFIG = {
+    "protocol": "vless",
+    "port": 8080,
+    "network": "ws",
+    "security": "none",
+    "path": "/cdn",
+}
