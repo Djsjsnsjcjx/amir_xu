@@ -138,12 +138,14 @@ class XUIPanel:
             return False
 
 
-def wait_for_panel(url: str, timeout: int = 180, interval: int = 10) -> bool:
+def wait_for_panel(url: str, timeout: int = 60, interval: int = 5) -> bool:
     """Wait for a panel to become accessible"""
+    # Ensure URL has /managepanel/ path
+    panel_url = url.rstrip("/") + "/managepanel/"
     start = time.time()
     while time.time() - start < timeout:
         try:
-            resp = requests.get(url, timeout=10, allow_redirects=True)
+            resp = requests.get(panel_url, timeout=10, allow_redirects=True)
             if resp.status_code == 200:
                 return True
         except Exception:
